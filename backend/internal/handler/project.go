@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -8,15 +9,26 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/mosaic-app/mosaic/backend/internal/orchestrator"
+	"github.com/mosaic-app/mosaic/backend/internal/repository"
 	"github.com/mosaic-app/mosaic/backend/internal/skill"
 )
 
-type ProjectHandler struct {
-	orch *orchestrator.Orchestrator
+type projectStarter interface {
+	StartAsync(ctx context.Context, projectID string, brief *skill.ProjectBrief, selectedEntries []string)
+	GetStatus(projectID string) (*orchestrator.ProjectStatus, bool)
 }
 
-func NewProjectHandler(orch *orchestrator.Orchestrator) *ProjectHandler {
-	return &ProjectHandler{orch: orch}
+type projectCreator interface {
+	CreateProject(ctx context.Context, params repository.CreateProjectParams) (string, error)
+}
+
+type ProjectHandler struct {
+	orch     projectStarter
+	projects projectCreator
+}
+
+func NewProjectHandler(orch projectStarter, projects projectCreator) *ProjectHandler {
+	return &ProjectHandler{orch: orch, projects: projects}
 }
 
 type createProjectReq struct {
@@ -44,8 +56,23 @@ func (h *ProjectHandler) CreateAndStart(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// V0.1 简化：直接从请求构建 Brief，后续接入数据库和 LLM Brief 生成
-	projectID := fmt.Sprintf("proj_%d", time.Now().UnixMilli())
+	projectID, err := h.projects.CreateProject(r.Context(), repository.CreateProjectParams{
+		Name:            req.Name,
+		Type:            req.Type,
+		Industry:        req.Industry,
+		Market:          req.Market,
+		TargetAudience:  req.TargetAudience,
+		Goal:            req.Goal,
+		BudgetRange:     req.BudgetRange,
+		StyleKeywords:   req.StyleKeywords,
+		SelectedEntries: req.SelectedEntries,
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "CREATE_PROJECT_FAILED", "项目创建失败")
+		return
+	}
+
+	// V0.1 简化：直接从请求构建 Brief，后续接入 LLM Brief 生成
 	brief := &skill.ProjectBrief{
 		ProjectID:        projectID,
 		Objective:        req.Goal,

@@ -1,9 +1,11 @@
 package main
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	chimw "github.com/go-chi/chi/v5/middleware"
@@ -12,6 +14,7 @@ import (
 	"github.com/mosaic-app/mosaic/backend/internal/handler"
 	"github.com/mosaic-app/mosaic/backend/internal/llm"
 	"github.com/mosaic-app/mosaic/backend/internal/orchestrator"
+	"github.com/mosaic-app/mosaic/backend/internal/repository"
 	"github.com/mosaic-app/mosaic/backend/internal/skill"
 )
 
@@ -22,6 +25,16 @@ func main() {
 		Level: slog.LevelInfo,
 	}))
 	slog.SetDefault(logger)
+
+	dbCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	db, err := repository.OpenPostgres(dbCtx, cfg.Database.URL)
+	if err != nil {
+		slog.Error("database connection failed", "err", err)
+		os.Exit(1)
+	}
+	defer db.Close()
+	store := repository.NewPostgresStore(db)
 
 	// LLM Provider
 	llmProvider := llm.NewOpenAI(cfg.LLM.APIKey, cfg.LLM.Model)
@@ -34,10 +47,10 @@ func main() {
 	registry.Register(skill.NewDeckSkill(llmProvider))
 
 	// 编排器
-	orch := orchestrator.New(registry)
+	orch := orchestrator.NewWithStore(registry, store)
 
 	// Handlers
-	projectHandler := handler.NewProjectHandler(orch)
+	projectHandler := handler.NewProjectHandler(orch, store)
 
 	// 路由
 	r := chi.NewRouter()

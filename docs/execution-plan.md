@@ -65,7 +65,7 @@ V0.1 MVP（当前）─── V0.2 Web 可用 ─── V0.3 Admin 上线 ──
 **验收标准**：Postman 能走完注册→登录→创建项目→轮询进度→查看交付物完整流程。
 
 #### 1.4 LLM Key 配置
-- [ ] 确保 `.env` 里 `OPENAI_API_KEY` 生效，`config.go` 正确读取
+- [ ] 确保 `.env` 里 `LLM_API_KEY` 生效，`config.go` 正确读取
 - [ ] 至少走通一次真实 LLM 调用（不用 mock），输出有意义的内容
 
 **验收标准**：`curl POST /api/v1/projects/start`，5分钟内 SSE 推送4个 Skill 完成，数据库有记录。

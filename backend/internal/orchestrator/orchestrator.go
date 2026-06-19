@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -15,11 +16,11 @@ import (
 type Phase string
 
 const (
-	PhaseBriefGeneration   Phase = "brief_generation"
-	PhaseSkillExecution    Phase = "skill_execution"
-	PhaseConsistencyCheck  Phase = "consistency_check"
-	PhaseDone              Phase = "done"
-	PhaseFailed            Phase = "failed"
+	PhaseBriefGeneration  Phase = "brief_generation"
+	PhaseSkillExecution   Phase = "skill_execution"
+	PhaseConsistencyCheck Phase = "consistency_check"
+	PhaseDone             Phase = "done"
+	PhaseFailed           Phase = "failed"
 )
 
 // TaskStatus 表示单个任务状态
@@ -39,9 +40,21 @@ type ProjectStatus struct {
 	Tasks     []TaskStatus
 }
 
+var ErrStatusNotFound = errors.New("project status not found")
+
+// Store persists project execution state outside the in-memory SSE cache.
+type Store interface {
+	InitTasks(ctx context.Context, projectID string, tasks []TaskStatus) error
+	UpdateTaskStatus(ctx context.Context, projectID string, task TaskStatus) error
+	SaveDeliverable(ctx context.Context, projectID string, output *skill.Output) error
+	UpdateProjectStatus(ctx context.Context, projectID string, phase Phase, progress int, errorMsg string) error
+	GetStatus(ctx context.Context, projectID string) (*ProjectStatus, error)
+}
+
 // Orchestrator 负责项目工作流调度
 type Orchestrator struct {
 	registry *skill.Registry
+	store    Store
 
 	mu       sync.RWMutex
 	statuses map[string]*projectState // projectID -> state
@@ -53,8 +66,13 @@ type projectState struct {
 }
 
 func New(registry *skill.Registry) *Orchestrator {
+	return NewWithStore(registry, nil)
+}
+
+func NewWithStore(registry *skill.Registry, store Store) *Orchestrator {
 	return &Orchestrator{
 		registry: registry,
+		store:    store,
 		statuses: make(map[string]*projectState),
 	}
 }
@@ -85,12 +103,34 @@ func (o *Orchestrator) StartAsync(ctx context.Context, projectID string, brief *
 // GetStatus 查询当前执行状态
 func (o *Orchestrator) GetStatus(projectID string) (*ProjectStatus, bool) {
 	o.mu.RLock()
-	defer o.mu.RUnlock()
 	state, ok := o.statuses[projectID]
-	if !ok {
+	if ok {
+		statusCopy := cloneStatus(state.status)
+		o.mu.RUnlock()
+		return &statusCopy, true
+	}
+	o.mu.RUnlock()
+
+	if o.store == nil {
 		return nil, false
 	}
-	statusCopy := state.status
+
+	status, err := o.store.GetStatus(context.Background(), projectID)
+	if err != nil {
+		if !errors.Is(err, ErrStatusNotFound) {
+			slog.Error("restore project status failed", "project_id", projectID, "err", err)
+		}
+		return nil, false
+	}
+
+	statusCopy := cloneStatus(*status)
+	o.mu.Lock()
+	o.statuses[projectID] = &projectState{
+		status:  statusCopy,
+		outputs: make(map[skill.Type]*skill.Output),
+	}
+	o.mu.Unlock()
+
 	return &statusCopy, true
 }
 
@@ -110,6 +150,7 @@ func (o *Orchestrator) execute(ctx context.Context, projectID string, brief *ski
 		})
 	}
 	o.updateTasks(projectID, taskStatuses)
+	o.persistInitTasks(ctx, projectID, taskStatuses)
 	o.setPhase(projectID, PhaseSkillExecution)
 
 	// 按依赖关系分层执行
@@ -150,6 +191,7 @@ func (o *Orchestrator) execute(ctx context.Context, projectID string, brief *ski
 				}
 				o.mu.Unlock()
 
+				o.persistDeliverable(gCtx, projectID, output)
 				o.updateTaskStatus(projectID, s.Type(), "done", "")
 				return nil
 			})
@@ -273,18 +315,24 @@ func (o *Orchestrator) getState(projectID string) *projectState {
 
 func (o *Orchestrator) setPhase(projectID string, phase Phase) {
 	o.mu.Lock()
-	defer o.mu.Unlock()
+	var progress int
 	if s := o.statuses[projectID]; s != nil {
 		s.status.Phase = phase
+		progress = s.status.Progress
 	}
+	o.mu.Unlock()
+	o.persistProjectStatus(context.Background(), projectID, phase, progress, "")
 }
 
 func (o *Orchestrator) setProgress(projectID string, progress int) {
 	o.mu.Lock()
-	defer o.mu.Unlock()
+	var phase Phase
 	if s := o.statuses[projectID]; s != nil {
 		s.status.Progress = progress
+		phase = s.status.Phase
 	}
+	o.mu.Unlock()
+	o.persistProjectStatus(context.Background(), projectID, phase, progress, "")
 }
 
 func (o *Orchestrator) updateTasks(projectID string, tasks []TaskStatus) {
@@ -297,12 +345,14 @@ func (o *Orchestrator) updateTasks(projectID string, tasks []TaskStatus) {
 
 func (o *Orchestrator) updateTaskStatus(projectID string, skillType skill.Type, status, errMsg string) {
 	o.mu.Lock()
-	defer o.mu.Unlock()
 	state := o.statuses[projectID]
 	if state == nil {
+		o.mu.Unlock()
 		return
 	}
 	now := time.Now()
+	var updated TaskStatus
+	var found bool
 	for i := range state.status.Tasks {
 		if state.status.Tasks[i].SkillType == skillType {
 			state.status.Tasks[i].Status = status
@@ -312,7 +362,54 @@ func (o *Orchestrator) updateTaskStatus(projectID string, skillType skill.Type, 
 			} else if status == "done" || status == "failed" {
 				state.status.Tasks[i].CompletedAt = &now
 			}
+			updated = state.status.Tasks[i]
+			found = true
 			break
 		}
+	}
+	o.mu.Unlock()
+	if found {
+		o.persistTaskStatus(context.Background(), projectID, updated)
+	}
+}
+
+func cloneStatus(status ProjectStatus) ProjectStatus {
+	status.Tasks = append([]TaskStatus(nil), status.Tasks...)
+	return status
+}
+
+func (o *Orchestrator) persistInitTasks(ctx context.Context, projectID string, tasks []TaskStatus) {
+	if o.store == nil {
+		return
+	}
+	if err := o.store.InitTasks(ctx, projectID, tasks); err != nil {
+		slog.ErrorContext(ctx, "persist init tasks failed", "project_id", projectID, "err", err)
+	}
+}
+
+func (o *Orchestrator) persistTaskStatus(ctx context.Context, projectID string, task TaskStatus) {
+	if o.store == nil {
+		return
+	}
+	if err := o.store.UpdateTaskStatus(ctx, projectID, task); err != nil {
+		slog.ErrorContext(ctx, "persist task status failed", "project_id", projectID, "skill_type", task.SkillType, "err", err)
+	}
+}
+
+func (o *Orchestrator) persistDeliverable(ctx context.Context, projectID string, output *skill.Output) {
+	if o.store == nil || output == nil {
+		return
+	}
+	if err := o.store.SaveDeliverable(ctx, projectID, output); err != nil {
+		slog.ErrorContext(ctx, "persist deliverable failed", "project_id", projectID, "skill_type", output.SkillType, "err", err)
+	}
+}
+
+func (o *Orchestrator) persistProjectStatus(ctx context.Context, projectID string, phase Phase, progress int, errorMsg string) {
+	if o.store == nil || phase == "" {
+		return
+	}
+	if err := o.store.UpdateProjectStatus(ctx, projectID, phase, progress, errorMsg); err != nil {
+		slog.ErrorContext(ctx, "persist project status failed", "project_id", projectID, "phase", phase, "err", err)
 	}
 }
