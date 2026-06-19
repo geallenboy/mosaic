@@ -1,0 +1,899 @@
+openapi: "3.1.0"
+
+info:
+  title: Mosaic API
+  description: |
+    Mosaic 万象集 API - AI Workspace Agents 平台
+    
+    两套 API 前缀：
+    - /api/v1/ 用户侧（已登录用户）
+    - /admin/api/v1/ 管理后台（system_admin 角色）
+  version: "0.1.0"
+  contact:
+    name: Mosaic Team
+
+servers:
+  - url: http://localhost:8080
+    description: 本地开发
+
+tags:
+  - name: auth
+    description: 认证
+  - name: projects
+    description: 项目管理
+  - name: deliverables
+    description: 交付物
+  - name: skills
+    description: Skill Hub
+  - name: health
+    description: 健康检查
+
+paths:
+  # ─── 健康检查 ─────────────────────────────────────────────
+  /health:
+    get:
+      operationId: healthCheck
+      tags: [health]
+      summary: 服务健康检查
+      security: []
+      responses:
+        '200':
+          description: 服务正常
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+
+  # ─── 认证 ─────────────────────────────────────────────────
+  /api/v1/auth/register:
+    post:
+      operationId: register
+      tags: [auth]
+      summary: 注册
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+      responses:
+        '201':
+          description: 注册成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+        '409':
+          $ref: '#/components/responses/ConflictError'
+
+  /api/v1/auth/login:
+    post:
+      operationId: login
+      tags: [auth]
+      summary: 登录
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: 登录成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+
+  /api/v1/auth/refresh:
+    post:
+      operationId: refreshToken
+      tags: [auth]
+      summary: 刷新 Token
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefreshTokenRequest'
+      responses:
+        '200':
+          description: 刷新成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+
+  # ─── 项目 ─────────────────────────────────────────────────
+  /api/v1/projects:
+    get:
+      operationId: listProjects
+      tags: [projects]
+      summary: 获取项目列表（只返回当前用户的）
+      parameters:
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/PageSizeParam'
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [draft, running, done, failed, archived]
+      responses:
+        '200':
+          description: 项目列表
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectListResponse'
+
+    post:
+      operationId: createProject
+      tags: [projects]
+      summary: 创建项目
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateProjectRequest'
+      responses:
+        '201':
+          description: 创建成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectResponse'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /api/v1/projects/{id}:
+    get:
+      operationId: getProject
+      tags: [projects]
+      summary: 获取项目详情
+      parameters:
+        - $ref: '#/components/parameters/IDParam'
+      responses:
+        '200':
+          description: 项目详情
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectDetailResponse'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+
+    patch:
+      operationId: updateProject
+      tags: [projects]
+      summary: 更新项目基础信息（仅限 draft 状态）
+      parameters:
+        - $ref: '#/components/parameters/IDParam'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateProjectRequest'
+      responses:
+        '200':
+          description: 更新成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectResponse'
+
+    delete:
+      operationId: deleteProject
+      tags: [projects]
+      summary: 删除项目
+      parameters:
+        - $ref: '#/components/parameters/IDParam'
+      responses:
+        '204':
+          description: 删除成功
+
+  /api/v1/projects/{id}/start:
+    post:
+      operationId: startProject
+      tags: [projects]
+      summary: 启动项目 Skill 执行（异步）
+      parameters:
+        - $ref: '#/components/parameters/IDParam'
+      responses:
+        '202':
+          description: 开始执行
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectStatusResponse'
+        '409':
+          $ref: '#/components/responses/ConflictError'
+
+  /api/v1/projects/{id}/progress:
+    get:
+      operationId: getProjectProgress
+      tags: [projects]
+      summary: SSE 实时执行进度流
+      parameters:
+        - $ref: '#/components/parameters/IDParam'
+      responses:
+        '200':
+          description: SSE 事件流
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: |
+                  SSE 事件格式：
+                  event: progress
+                  data: {"phase":"skill_execution","progress":50,"tasks":[...]}
+                  
+                  event: close
+                  data: {}
+
+  # ─── 交付物 ────────────────────────────────────────────────
+  /api/v1/projects/{id}/deliverables:
+    get:
+      operationId: listDeliverables
+      tags: [deliverables]
+      summary: 获取项目交付物列表
+      parameters:
+        - $ref: '#/components/parameters/IDParam'
+        - name: entry
+          in: query
+          schema:
+            $ref: '#/components/schemas/EntryType'
+      responses:
+        '200':
+          description: 交付物列表
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeliverableListResponse'
+
+  /api/v1/deliverables/{id}:
+    get:
+      operationId: getDeliverable
+      tags: [deliverables]
+      summary: 获取交付物详情
+      parameters:
+        - $ref: '#/components/parameters/IDParam'
+      responses:
+        '200':
+          description: 交付物详情
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeliverableResponse'
+
+    patch:
+      operationId: updateDeliverable
+      tags: [deliverables]
+      summary: 更新交付物内容
+      parameters:
+        - $ref: '#/components/parameters/IDParam'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateDeliverableRequest'
+      responses:
+        '200':
+          description: 更新成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeliverableResponse'
+
+  /api/v1/deliverables/{id}/regenerate:
+    post:
+      operationId: regenerateDeliverable
+      tags: [deliverables]
+      summary: 重新生成交付物
+      parameters:
+        - $ref: '#/components/parameters/IDParam'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                instruction:
+                  type: string
+                  description: 修改指令（可选，不填则基于原 Brief 重新生成）
+      responses:
+        '202':
+          description: 开始重新生成
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeliverableResponse'
+
+  # ─── Skill Hub ─────────────────────────────────────────────
+  /api/v1/skills:
+    get:
+      operationId: listSkills
+      tags: [skills]
+      summary: 获取 Skill 列表（Skill Hub）
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [available, beta, deprecated]
+      responses:
+        '200':
+          description: Skill 列表
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SkillListResponse'
+
+# ─── 组件定义 ────────────────────────────────────────────────
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    IDParam:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+    PageParam:
+      name: page
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        default: 1
+
+    PageSizeParam:
+      name: page_size
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+
+  schemas:
+    # ─── 枚举 ─────────────────────────────────────────────────
+    EntryType:
+      type: string
+      enum:
+        - documents
+        - slides
+        - sheets
+        - images
+        - videos
+        - podcasts
+        - skypage
+        - ai_developer
+
+    ProjectType:
+      type: string
+      enum:
+        - store_opening
+        - brand_launch
+        - product_launch
+        - content_creation
+        - custom
+
+    ProjectStatus:
+      type: string
+      enum:
+        - draft
+        - running
+        - done
+        - failed
+        - archived
+
+    TaskStatus:
+      type: string
+      enum:
+        - pending
+        - running
+        - done
+        - failed
+
+    DeliverableFormat:
+      type: string
+      enum:
+        - markdown
+        - html
+        - json
+        - image_prompt
+        - code
+
+    # ─── 认证 ─────────────────────────────────────────────────
+    RegisterRequest:
+      type: object
+      required: [email, password, display_name]
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          minLength: 8
+        display_name:
+          type: string
+          minLength: 1
+          maxLength: 50
+
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+
+    RefreshTokenRequest:
+      type: object
+      required: [refresh_token]
+      properties:
+        refresh_token:
+          type: string
+
+    AuthResponse:
+      type: object
+      properties:
+        data:
+          type: object
+          properties:
+            access_token:
+              type: string
+            refresh_token:
+              type: string
+            expires_in:
+              type: integer
+              description: Access Token 有效期（秒）
+            user:
+              $ref: '#/components/schemas/UserInfo'
+        meta:
+          $ref: '#/components/schemas/ResponseMeta'
+
+    UserInfo:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+        display_name:
+          type: string
+        role:
+          type: string
+        avatar_url:
+          type: string
+          nullable: true
+
+    # ─── 项目 ─────────────────────────────────────────────────
+    CreateProjectRequest:
+      type: object
+      required: [name, type, goal, selected_entries]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        type:
+          $ref: '#/components/schemas/ProjectType'
+        industry:
+          type: string
+        market:
+          type: string
+        target_audience:
+          type: string
+        goal:
+          type: string
+          minLength: 10
+        budget_range:
+          type: string
+        style_keywords:
+          type: array
+          items:
+            type: string
+          maxItems: 10
+        selected_entries:
+          type: array
+          items:
+            $ref: '#/components/schemas/EntryType'
+          minItems: 1
+
+    UpdateProjectRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        industry:
+          type: string
+        market:
+          type: string
+        target_audience:
+          type: string
+        goal:
+          type: string
+        budget_range:
+          type: string
+        style_keywords:
+          type: array
+          items:
+            type: string
+        selected_entries:
+          type: array
+          items:
+            $ref: '#/components/schemas/EntryType'
+
+    ProjectResponse:
+      type: object
+      properties:
+        data:
+          $ref: '#/components/schemas/Project'
+        meta:
+          $ref: '#/components/schemas/ResponseMeta'
+
+    ProjectListResponse:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Project'
+        pagination:
+          $ref: '#/components/schemas/Pagination'
+        meta:
+          $ref: '#/components/schemas/ResponseMeta'
+
+    ProjectDetailResponse:
+      type: object
+      properties:
+        data:
+          allOf:
+            - $ref: '#/components/schemas/Project'
+            - type: object
+              properties:
+                brief:
+                  $ref: '#/components/schemas/ProjectBrief'
+                  nullable: true
+                tasks:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/Task'
+        meta:
+          $ref: '#/components/schemas/ResponseMeta'
+
+    ProjectStatusResponse:
+      type: object
+      properties:
+        data:
+          type: object
+          properties:
+            project_id:
+              type: string
+              format: uuid
+            phase:
+              type: string
+              enum: [brief_generation, skill_execution, consistency_check, done, failed]
+            progress:
+              type: integer
+              minimum: 0
+              maximum: 100
+            tasks:
+              type: array
+              items:
+                $ref: '#/components/schemas/Task'
+        meta:
+          $ref: '#/components/schemas/ResponseMeta'
+
+    Project:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        type:
+          $ref: '#/components/schemas/ProjectType'
+        industry:
+          type: string
+          nullable: true
+        market:
+          type: string
+          nullable: true
+        target_audience:
+          type: string
+          nullable: true
+        goal:
+          type: string
+        budget_range:
+          type: string
+          nullable: true
+        style_keywords:
+          type: array
+          items:
+            type: string
+        selected_entries:
+          type: array
+          items:
+            $ref: '#/components/schemas/EntryType'
+        status:
+          $ref: '#/components/schemas/ProjectStatus'
+        error_message:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    ProjectBrief:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        objective:
+          type: string
+        audience:
+          type: string
+        positioning:
+          type: string
+        value_proposition:
+          type: string
+        tone_of_voice:
+          type: string
+        visual_direction:
+          type: string
+        key_messages:
+          type: array
+          items:
+            type: string
+        assumptions:
+          type: array
+          items:
+            type: string
+
+    Task:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        skill_type:
+          type: string
+        title:
+          type: string
+        status:
+          $ref: '#/components/schemas/TaskStatus'
+        error_message:
+          type: string
+          nullable: true
+        started_at:
+          type: string
+          format: date-time
+          nullable: true
+        completed_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    # ─── 交付物 ───────────────────────────────────────────────
+    DeliverableResponse:
+      type: object
+      properties:
+        data:
+          $ref: '#/components/schemas/Deliverable'
+        meta:
+          $ref: '#/components/schemas/ResponseMeta'
+
+    DeliverableListResponse:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Deliverable'
+        meta:
+          $ref: '#/components/schemas/ResponseMeta'
+
+    UpdateDeliverableRequest:
+      type: object
+      properties:
+        content:
+          type: string
+        title:
+          type: string
+
+    Deliverable:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        project_id:
+          type: string
+          format: uuid
+        task_id:
+          type: string
+          format: uuid
+          nullable: true
+        entry:
+          $ref: '#/components/schemas/EntryType'
+        surface:
+          type: string
+          nullable: true
+        type:
+          type: string
+        title:
+          type: string
+        format:
+          $ref: '#/components/schemas/DeliverableFormat'
+        content:
+          type: string
+          nullable: true
+        version:
+          type: integer
+        status:
+          type: string
+          enum: [pending, generating, done, failed]
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    # ─── Skill ────────────────────────────────────────────────
+    SkillListResponse:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Skill'
+        meta:
+          $ref: '#/components/schemas/ResponseMeta'
+
+    Skill:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        type:
+          type: string
+        description:
+          type: string
+          nullable: true
+        source:
+          type: string
+          enum: [built_in, custom]
+        output_type:
+          $ref: '#/components/schemas/DeliverableFormat'
+        supported_entries:
+          type: array
+          items:
+            $ref: '#/components/schemas/EntryType'
+        status:
+          type: string
+          enum: [available, beta, deprecated]
+        version:
+          type: string
+
+    # ─── 通用 ─────────────────────────────────────────────────
+    HealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+        checks:
+          type: object
+          additionalProperties:
+            type: string
+
+    ResponseMeta:
+      type: object
+      properties:
+        request_id:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+
+    Pagination:
+      type: object
+      properties:
+        page:
+          type: integer
+        page_size:
+          type: integer
+        total:
+          type: integer
+        has_next:
+          type: boolean
+
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+            detail:
+              type: object
+              nullable: true
+        meta:
+          $ref: '#/components/schemas/ResponseMeta'
+
+  responses:
+    ValidationError:
+      description: 请求参数校验失败
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error:
+              code: VALIDATION_ERROR
+              message: 请求参数校验失败
+
+    NotFoundError:
+      description: 资源不存在
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error:
+              code: PROJECT_NOT_FOUND
+              message: 项目不存在或已被删除
+
+    UnauthorizedError:
+      description: 未认证
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error:
+              code: UNAUTHORIZED
+              message: 请先登录
+
+    ConflictError:
+      description: 资源冲突
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+security:
+  - BearerAuth: []

@@ -1,0 +1,21 @@
+{
+  "name": "mosaic",
+  "version": "0.0.1",
+  "private": true,
+  "scripts": {
+    "dev:web": "pnpm --filter @mosaic/web dev",
+    "dev:admin": "pnpm --filter @mosaic/admin dev",
+    "build:web": "pnpm --filter @mosaic/web build",
+    "build:admin": "pnpm --filter @mosaic/admin build",
+    "test": "pnpm --filter './apps/*' --filter './packages/*' test --run",
+    "lint": "pnpm --filter './apps/*' --filter './packages/*' lint",
+    "gen-api": "make -C backend gen-api"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0"
+  },
+  "engines": {
+    "node": ">=20.0.0",
+    "pnpm": ">=9.0.0"
+  }
+}
