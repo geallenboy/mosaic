@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	openai "github.com/sashabaranov/go-openai"
@@ -76,9 +77,9 @@ func (c *OpenAIClient) Complete(ctx context.Context, req CompletionRequest) (*Co
 			lastErr = err
 			continue
 		}
-		return nil, fmt.Errorf("openai complete: %w", err)
+		return nil, sanitizeCompletionError(err)
 	}
-	return nil, fmt.Errorf("openai complete after 3 attempts: %w", lastErr)
+	return nil, sanitizeCompletionError(lastErr)
 }
 
 func isRetryable(err error) bool {
@@ -87,4 +88,19 @@ func isRetryable(err error) bool {
 		return apiErr.HTTPStatusCode == 429 || apiErr.HTTPStatusCode >= 500
 	}
 	return false
+}
+
+func sanitizeCompletionError(err error) error {
+	if err == nil {
+		return nil
+	}
+	var apiErr *openai.APIError
+	if errors.As(err, &apiErr) && apiErr.HTTPStatusCode == 401 {
+		return errors.New("openai complete: authentication failed")
+	}
+	msg := err.Error()
+	if strings.Contains(strings.ToLower(msg), "api key") {
+		return errors.New("openai complete: authentication failed")
+	}
+	return fmt.Errorf("openai complete: %w", err)
 }

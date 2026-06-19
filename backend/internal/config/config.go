@@ -1,7 +1,10 @@
 package config
 
 import (
+	"bufio"
 	"os"
+	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -49,6 +52,8 @@ type AuthConfig struct {
 }
 
 func Load() *Config {
+	loadDotEnv()
+
 	return &Config{
 		Server: ServerConfig{
 			Addr:         getEnv("SERVER_ADDR", ":8080"),
@@ -81,6 +86,66 @@ func Load() *Config {
 			RefreshTokenExpiry: 7 * 24 * time.Hour,
 		},
 	}
+}
+
+func loadDotEnv() {
+	path, ok := findDotEnv()
+	if !ok {
+		return
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		key, value, ok := parseEnvLine(scanner.Text())
+		if !ok {
+			continue
+		}
+		if os.Getenv(key) != "" {
+			continue
+		}
+		_ = os.Setenv(key, value)
+	}
+}
+
+func findDotEnv() (string, bool) {
+	dir, err := os.Getwd()
+	if err != nil {
+		return "", false
+	}
+	for {
+		path := filepath.Join(dir, ".env")
+		if info, err := os.Stat(path); err == nil && !info.IsDir() {
+			return path, true
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "", false
+		}
+		dir = parent
+	}
+}
+
+func parseEnvLine(line string) (string, string, bool) {
+	line = strings.TrimSpace(line)
+	if line == "" || strings.HasPrefix(line, "#") {
+		return "", "", false
+	}
+	key, value, found := strings.Cut(line, "=")
+	if !found {
+		return "", "", false
+	}
+	key = strings.TrimSpace(key)
+	value = strings.TrimSpace(value)
+	if key == "" || strings.ContainsAny(key, " \t") {
+		return "", "", false
+	}
+	value = strings.Trim(value, `"'`)
+	return key, value, true
 }
 
 func getEnv(key, fallback string) string {

@@ -39,33 +39,33 @@ V0.1 MVP（当前）─── V0.2 Web 可用 ─── V0.3 Admin 上线 ──
 ### 任务清单
 
 #### 1.1 数据库层接入
-- [ ] 在 Go 后端集成 `pgx` 或 `database/sql`，连接 PostgreSQL
-- [ ] 实现 `ProjectRepository`：`Create`、`UpdateStatus`、`GetByID`
-- [ ] 实现 `TaskRepository`：批量写入任务状态
-- [ ] 实现 `DeliverableRepository`：保存 Skill 输出内容
-- [ ] 替换当前 Orchestrator 中的内存状态为数据库持久化
+- [x] 在 Go 后端集成 `pgx` 或 `database/sql`，连接 PostgreSQL
+- [x] 实现 `ProjectRepository`：`Create`、`UpdateStatus`、`GetByID`
+- [x] 实现 `TaskRepository`：批量写入任务状态
+- [x] 实现 `DeliverableRepository`：保存 Skill 输出内容
+- [x] 替换当前 Orchestrator 中的内存状态为数据库持久化
 
 **验收标准**：重启服务后，历史项目进度可查询；不再丢失进度状态。
 
 #### 1.2 认证模块
-- [ ] 实现 `POST /api/v1/auth/register`（邮箱+密码）
-- [ ] 实现 `POST /api/v1/auth/login`，返回 JWT access + refresh token
-- [ ] 实现 JWT 中间件，保护项目类接口
-- [ ] 实现 `POST /api/v1/auth/refresh`
+- [x] 实现 `POST /api/v1/auth/register`（邮箱+密码）
+- [x] 实现 `POST /api/v1/auth/login`，返回 JWT access + refresh token
+- [x] 实现 JWT 中间件，保护项目类接口
+- [x] 实现 `POST /api/v1/auth/refresh`
 
 **验收标准**：curl 注册、登录、带 token 创建项目全链路通过。
 
 #### 1.3 项目接口完善
-- [ ] `POST /api/v1/projects/start` 关联当前登录用户
-- [ ] `GET /api/v1/projects` 返回用户项目列表（分页）
-- [ ] `GET /api/v1/projects/{id}` 返回项目详情 + 当前状态
-- [ ] `GET /api/v1/projects/{id}/progress` SSE 实时进度（现有，需补 auth）
-- [ ] `GET /api/v1/deliverables/{id}` 返回单个交付物内容
+- [x] `POST /api/v1/projects/start` 关联当前登录用户
+- [x] `GET /api/v1/projects` 返回用户项目列表（分页）
+- [x] `GET /api/v1/projects/{id}` 返回项目详情 + 当前状态
+- [x] `GET /api/v1/projects/{id}/progress` SSE 实时进度（现有，需补 auth）
+- [x] `GET /api/v1/deliverables/{id}` 返回单个交付物内容
 
 **验收标准**：Postman 能走完注册→登录→创建项目→轮询进度→查看交付物完整流程。
 
 #### 1.4 LLM Key 配置
-- [ ] 确保 `.env` 里 `LLM_API_KEY` 生效，`config.go` 正确读取
+- [x] 确保 `.env` 里 `LLM_API_KEY` 生效，`config.go` 正确读取
 - [ ] 至少走通一次真实 LLM 调用（不用 mock），输出有意义的内容
 
 **验收标准**：`curl POST /api/v1/projects/start`，5分钟内 SSE 推送4个 Skill 完成，数据库有记录。

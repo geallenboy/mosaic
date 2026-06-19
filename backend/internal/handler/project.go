@@ -3,8 +3,10 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -20,6 +22,10 @@ type projectStarter interface {
 
 type projectCreator interface {
 	CreateProject(ctx context.Context, params repository.CreateProjectParams) (string, error)
+	ListProjects(ctx context.Context, params repository.ListProjectsParams) ([]repository.Project, int, error)
+	GetProjectDetail(ctx context.Context, projectID string, userID string) (*repository.ProjectDetail, error)
+	GetDeliverable(ctx context.Context, deliverableID string, userID string) (*repository.Deliverable, error)
+	ListDeliverables(ctx context.Context, projectID string, userID string, entry string) ([]repository.Deliverable, error)
 }
 
 type ProjectHandler struct {
@@ -41,6 +47,37 @@ type createProjectReq struct {
 	BudgetRange     string   `json:"budget_range"`
 	StyleKeywords   []string `json:"style_keywords"`
 	SelectedEntries []string `json:"selected_entries"`
+}
+
+func (h *ProjectHandler) ListProjects(w http.ResponseWriter, r *http.Request) {
+	user, ok := CurrentUser(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "请先登录")
+		return
+	}
+
+	page := intQuery(r, "page", 1)
+	pageSize := intQuery(r, "page_size", 20)
+	projects, total, err := h.projects.ListProjects(r.Context(), repository.ListProjectsParams{
+		UserID:   user.UserID,
+		Status:   r.URL.Query().Get("status"),
+		Page:     page,
+		PageSize: pageSize,
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "LIST_PROJECTS_FAILED", "获取项目列表失败")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"data": projects,
+		"pagination": map[string]any{
+			"page":      page,
+			"page_size": pageSize,
+			"total":     total,
+			"has_next":  page*pageSize < total,
+		},
+	})
 }
 
 // CreateAndStart 创建项目并立即启动（V0.1 简化版：无数据库，直接执行）
@@ -103,6 +140,61 @@ func (h *ProjectHandler) CreateAndStart(w http.ResponseWriter, r *http.Request) 
 	})
 }
 
+func (h *ProjectHandler) GetProject(w http.ResponseWriter, r *http.Request) {
+	user, ok := CurrentUser(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "请先登录")
+		return
+	}
+	projectID := pathID(r)
+	detail, err := h.projects.GetProjectDetail(r.Context(), projectID, user.UserID)
+	if errors.Is(err, repository.ErrProjectNotFound) {
+		writeError(w, http.StatusNotFound, "PROJECT_NOT_FOUND", "项目不存在或已被删除")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "GET_PROJECT_FAILED", "获取项目详情失败")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"data": detailPayload(detail)})
+}
+
+func (h *ProjectHandler) GetDeliverable(w http.ResponseWriter, r *http.Request) {
+	user, ok := CurrentUser(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "请先登录")
+		return
+	}
+	deliverable, err := h.projects.GetDeliverable(r.Context(), pathID(r), user.UserID)
+	if errors.Is(err, repository.ErrProjectNotFound) {
+		writeError(w, http.StatusNotFound, "DELIVERABLE_NOT_FOUND", "交付物不存在或无权访问")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "GET_DELIVERABLE_FAILED", "获取交付物失败")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"data": deliverable})
+}
+
+func (h *ProjectHandler) ListDeliverables(w http.ResponseWriter, r *http.Request) {
+	user, ok := CurrentUser(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "请先登录")
+		return
+	}
+	deliverables, err := h.projects.ListDeliverables(r.Context(), pathID(r), user.UserID, r.URL.Query().Get("entry"))
+	if errors.Is(err, repository.ErrProjectNotFound) {
+		writeError(w, http.StatusNotFound, "PROJECT_NOT_FOUND", "项目不存在或已被删除")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "LIST_DELIVERABLES_FAILED", "获取交付物列表失败")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"data": deliverables})
+}
+
 // GetProgress SSE 实时进度推送
 func (h *ProjectHandler) GetProgress(w http.ResponseWriter, r *http.Request) {
 	projectID := chi.URLParam(r, "id")
@@ -159,4 +251,44 @@ func writeError(w http.ResponseWriter, code int, errCode, msg string) {
 			"message": msg,
 		},
 	})
+}
+
+func intQuery(r *http.Request, key string, fallback int) int {
+	value := r.URL.Query().Get(key)
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil || parsed < 1 {
+		return fallback
+	}
+	return parsed
+}
+
+func pathID(r *http.Request) string {
+	if id := chi.URLParam(r, "id"); id != "" {
+		return id
+	}
+	return r.PathValue("id")
+}
+
+func detailPayload(detail *repository.ProjectDetail) map[string]any {
+	return map[string]any{
+		"id":               detail.Project.ID,
+		"name":             detail.Project.Name,
+		"type":             detail.Project.Type,
+		"industry":         detail.Project.Industry,
+		"market":           detail.Project.Market,
+		"target_audience":  detail.Project.TargetAudience,
+		"goal":             detail.Project.Goal,
+		"budget_range":     detail.Project.BudgetRange,
+		"style_keywords":   detail.Project.StyleKeywords,
+		"selected_entries": detail.Project.SelectedEntries,
+		"status":           detail.Project.Status,
+		"error_message":    detail.Project.ErrorMessage,
+		"created_at":       detail.Project.CreatedAt,
+		"updated_at":       detail.Project.UpdatedAt,
+		"brief":            detail.Brief,
+		"tasks":            detail.Tasks,
+	}
 }

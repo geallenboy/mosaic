@@ -78,8 +78,12 @@ func main() {
 		r.Group(func(r chi.Router) {
 			r.Use(handler.AuthMiddleware(authService))
 			// V0.1 项目接口（简化版，完整项目 API 后续添加）
+			r.Get("/projects", projectHandler.ListProjects)
 			r.Post("/projects/start", projectHandler.CreateAndStart)
+			r.Get("/projects/{id}", projectHandler.GetProject)
 			r.Get("/projects/{id}/progress", projectHandler.GetProgress)
+			r.Get("/projects/{id}/deliverables", projectHandler.ListDeliverables)
+			r.Get("/deliverables/{id}", projectHandler.GetDeliverable)
 		})
 	})
 
