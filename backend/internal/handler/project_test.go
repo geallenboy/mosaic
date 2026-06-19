@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/mosaic-app/mosaic/backend/internal/auth"
 	"github.com/mosaic-app/mosaic/backend/internal/orchestrator"
 	"github.com/mosaic-app/mosaic/backend/internal/repository"
 	"github.com/mosaic-app/mosaic/backend/internal/skill"
@@ -52,6 +53,35 @@ func TestCreateAndStartUsesRepositoryProjectID(t *testing.T) {
 	}
 	if resp.Data.ProjectID != "db-project-id" {
 		t.Fatalf("expected response project ID from repository, got %q", resp.Data.ProjectID)
+	}
+}
+
+func TestCreateAndStartPassesCurrentUserToRepository(t *testing.T) {
+	creator := &fakeProjectCreator{projectID: "db-project-id"}
+	starter := &fakeProjectStarter{}
+	handler := NewProjectHandler(starter, creator)
+
+	body := bytes.NewBufferString(`{
+		"name":"Fresh Bowl",
+		"type":"store_opening",
+		"goal":"Launch a healthy lunch store opening campaign",
+		"selected_entries":["documents"]
+	}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/projects/start", body)
+	req = req.WithContext(context.WithValue(req.Context(), currentUserKey{}, &auth.Claims{
+		UserID: "user-from-token",
+		Email:  "user@example.com",
+		Role:   "user",
+	}))
+	rec := httptest.NewRecorder()
+
+	handler.CreateAndStart(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusAccepted, rec.Code, rec.Body.String())
+	}
+	if creator.params.UserID != "user-from-token" {
+		t.Fatalf("expected user id from auth context, got %q", creator.params.UserID)
 	}
 }
 

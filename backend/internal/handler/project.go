@@ -56,7 +56,13 @@ func (h *ProjectHandler) CreateAndStart(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	var userID string
+	if user, ok := CurrentUser(r.Context()); ok {
+		userID = user.UserID
+	}
+
 	projectID, err := h.projects.CreateProject(r.Context(), repository.CreateProjectParams{
+		UserID:          userID,
 		Name:            req.Name,
 		Type:            req.Type,
 		Industry:        req.Industry,

@@ -20,6 +20,7 @@ type PostgresStore struct {
 }
 
 type CreateProjectParams struct {
+	UserID          string
 	Name            string
 	Type            string
 	Industry        string
@@ -57,9 +58,13 @@ func NewPostgresStore(db *pgxpool.Pool) *PostgresStore {
 }
 
 func (s *PostgresStore) CreateProject(ctx context.Context, params CreateProjectParams) (string, error) {
-	ownerID, err := s.ensureLocalDevOwner(ctx)
-	if err != nil {
-		return "", err
+	ownerID := params.UserID
+	if ownerID == "" {
+		var err error
+		ownerID, err = s.ensureLocalDevOwner(ctx)
+		if err != nil {
+			return "", err
+		}
 	}
 
 	projectType := params.Type
@@ -68,7 +73,7 @@ func (s *PostgresStore) CreateProject(ctx context.Context, params CreateProjectP
 	}
 
 	var projectID string
-	err = s.db.QueryRow(ctx, `
+	err := s.db.QueryRow(ctx, `
 		INSERT INTO projects (
 			user_id, name, type, industry, market, target_audience, goal,
 			budget_range, style_keywords, selected_entries, status

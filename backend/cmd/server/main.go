@@ -10,6 +10,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	chimw "github.com/go-chi/chi/v5/middleware"
 
+	"github.com/mosaic-app/mosaic/backend/internal/auth"
 	appconfig "github.com/mosaic-app/mosaic/backend/internal/config"
 	"github.com/mosaic-app/mosaic/backend/internal/handler"
 	"github.com/mosaic-app/mosaic/backend/internal/llm"
@@ -48,8 +49,14 @@ func main() {
 
 	// 编排器
 	orch := orchestrator.NewWithStore(registry, store)
+	authService := auth.NewService(store, auth.Config{
+		JWTSecret:          cfg.Auth.JWTSecret,
+		AccessTokenExpiry:  cfg.Auth.AccessTokenExpiry,
+		RefreshTokenExpiry: cfg.Auth.RefreshTokenExpiry,
+	})
 
 	// Handlers
+	authHandler := handler.NewAuthHandler(authService)
 	projectHandler := handler.NewProjectHandler(orch, store)
 
 	// 路由
@@ -64,9 +71,16 @@ func main() {
 
 	// 用户侧 API
 	r.Route("/api/v1", func(r chi.Router) {
-		// V0.1 项目接口（简化版，无鉴权，后续添加）
-		r.Post("/projects/start", projectHandler.CreateAndStart)
-		r.Get("/projects/{id}/progress", projectHandler.GetProgress)
+		r.Post("/auth/register", authHandler.Register)
+		r.Post("/auth/login", authHandler.Login)
+		r.Post("/auth/refresh", authHandler.Refresh)
+
+		r.Group(func(r chi.Router) {
+			r.Use(handler.AuthMiddleware(authService))
+			// V0.1 项目接口（简化版，完整项目 API 后续添加）
+			r.Post("/projects/start", projectHandler.CreateAndStart)
+			r.Get("/projects/{id}/progress", projectHandler.GetProgress)
+		})
 	})
 
 	// Admin API（V0.1 占位）
